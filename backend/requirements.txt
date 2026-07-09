@@ -1,0 +1,26 @@
+# Web / API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+
+# Persistence
+SQLAlchemy==2.0.36
+
+# Numerics / analysis
+numpy==2.2.1
+scipy==1.15.0
+pandas==2.2.3
+pyarrow==18.1.0
+scikit-learn==1.6.0
+umap-learn==0.5.7
+
+# Flow cytometry FCS I/O
+flowkit==1.3.2
+
+# Automated population identification (FlowSOM clustering pipeline)
+anndata==0.10.9
+flowsom==0.2.2
+
+# ComBat fallback engine (from combat.pycombat import pycombat)
+combat==0.3.3

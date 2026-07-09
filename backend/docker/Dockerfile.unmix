@@ -1,0 +1,16 @@
+# AutoSpectral (DrCytometer/AutoSpectral, AGPL-3.0) spectral-unmixing engine.
+# Extends the already-built CytoNorm image (flowCore + FlowSOM + remotes) with
+# flowWorkspace + AutoSpectral. Invoked via file-based IPC like run_cytonorm.R.
+#
+#   docker build -f backend/docker/Dockerfile.unmix -t wakaflaka-r:unmix backend
+#   docker run --rm wakaflaka-r:unmix Rscript -e 'library(AutoSpectral); cat("ok\n")'
+
+FROM wakaflaka-r:cytonorm
+
+RUN R -e 'BiocManager::install(c("flowWorkspace"), update=FALSE, ask=FALSE)'
+RUN R -e 'remotes::install_github("DrCytometer/AutoSpectral", upgrade="never")'
+RUN R -e 'suppressMessages({library(AutoSpectral); library(flowWorkspace); library(flowCore)}); \
+          cat("AutoSpectral engine image OK:", as.character(packageVersion("AutoSpectral")), "\n"); \
+          print(sort(ls("package:AutoSpectral")))'
+
+WORKDIR /job

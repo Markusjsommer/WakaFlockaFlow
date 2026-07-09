@@ -1,0 +1,28 @@
+# WakaFlakaFlow — one-command run.
+#
+#   git clone <repo> && cd <repo>
+#   mkdir -p fcs && cp /path/to/your/*.fcs ./fcs/   # drop your FCS files here
+#   docker compose up --build
+#   open http://localhost:8000
+#
+# Everything runs locally in this container. No FCS file or result ever leaves
+# your machine.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wakaflakaflow:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persisted runtime state: SQLite provenance DB, exports, uploads.
+      - ./data:/app/data
+      # Drop your own .fcs files into ./fcs — they are auto-registered on startup
+      # (read-only mount; the tool never modifies your source files).
+      - ./fcs:/app/fcs:ro
+    environment:
+      # Directory scanned at startup for *.fcs to register on the default session.
+      WAKAFLAKA_FCS_DIR: /app/fcs
+    restart: unless-stopped

@@ -1,0 +1,15 @@
+# Keep the build context small and the image clean.
+.git
+.venv
+data
+scratchpad
+frontend/node_modules
+frontend/dist
+**/__pycache__
+*.pyc
+
+# Local-only fixtures (CC BY-ND E1 + FlowJo workspace) — never in the image.
+# NOTE: these top-level patterns do NOT match the nested sample_data/**/*.fcs
+# demo files, which are intentionally bundled.
+*.fcs
+*.wsp

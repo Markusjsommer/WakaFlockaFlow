@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Runtime data + generated artifacts (job dirs, corrected FCS, sqlite, exports)
+data/
+
+# Derived/modified FCS must NOT be committed — phitonex E1 is CC BY-ND
+# (NoDerivatives). Keep raw inputs out of the repo too; cite/link instead.
+*.fcs
+*.wsp
+
+# Exception: the flowSpecs demo set IS permissive (Artistic-2.0) and is shipped.
+!sample_data/
+!sample_data/**
+
+# scratch
+scratchpad/
+
+# OS / editor / tooling-local
+.DS_Store
+.claude/
+
+# Redundant root copies of demo assets (the canonical ones live in sample_data/)
+/QC_biology_check.png
+/single_stain_controls.tar.gz
