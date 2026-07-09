@@ -25,6 +25,20 @@ export async function createSession() {
   return data.session_id;
 }
 
+// POST /sessions/{sid}/files (multipart) -> [{ id, filename, n_events, n_channels }]
+// Uploads FCS file CONTENT (browsers cannot read a file's real disk path); the
+// backend saves each upload and registers it, returning the new file rows.
+export async function uploadFiles(sid, fileList) {
+  const fd = new FormData();
+  for (const f of fileList) fd.append('files', f, f.name);
+  const res = await fetch(`${BASE}/sessions/${sid}/files`, { method: 'POST', body: fd });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${res.statusText}${detail ? ': ' + detail : ''}`);
+  }
+  return res.json();
+}
+
 // GET /default-session -> { session_id }
 // The single-user default session that owns the bundled demo + ./fcs files.
 export async function getDefaultSession() {

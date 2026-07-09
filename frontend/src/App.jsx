@@ -3,6 +3,7 @@ import {
   createSession,
   getDefaultSession,
   listFiles,
+  uploadFiles,
   getPanelTemplate,
   startClustering,
   pollJob,
@@ -63,6 +64,34 @@ export default function App() {
   const [unmixResult, setUnmixResult] = useState(null);
   const [bundledCount, setBundledCount] = useState(15);
   const [selectedFileId, setSelectedFileId] = useState(null);
+
+  // Drag-and-drop / browse FCS upload.
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploadNote, setUploadNote] = useState(null);
+
+  async function handleFiles(fileList) {
+    const fcs = [...(fileList || [])].filter((f) => /\.fcs$/i.test(f.name));
+    if (!sessionId) return;
+    if (fcs.length === 0) {
+      setUploadNote('Only .fcs files are accepted.');
+      return;
+    }
+    setUploading(true);
+    setUploadNote(null);
+    setError(null);
+    try {
+      const added = await uploadFiles(sessionId, fcs);
+      setFiles((await listFiles(sessionId)) || []);
+      if (added && added[0]) setSelectedFileId(added[0].id);
+      const names = (added || []).map((a) => a.filename).join(', ');
+      setUploadNote(`Added ${added.length} file${added.length === 1 ? '' : 's'}: ${names}`);
+    } catch (e) {
+      setError('Upload failed: ' + e.message);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   // Create a session, load its files and the panel template on first mount.
   useEffect(() => {
@@ -247,12 +276,6 @@ export default function App() {
           </div>
           {sessionId && (
             <div className="site-header__meta">
-              {channels.length > 0 && (
-                <span>
-                  {channels.length} channels ·{' '}
-                  {channels.filter((c) => !c.is_scatter).length} markers
-                </span>
-              )}
               <code title={sessionId}>session {String(sessionId).slice(0, 8)}</code>
             </div>
           )}
@@ -292,6 +315,40 @@ export default function App() {
 
         {mode === 'analyze' ? (
           <>
+            <div
+              className={'dropzone' + (dragOver ? ' is-drag' : '')}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (!dragOver) setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                handleFiles(e.dataTransfer.files);
+              }}
+            >
+              <input
+                id="fcs-input"
+                type="file"
+                accept=".fcs"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => handleFiles(e.target.files)}
+              />
+              <label htmlFor="fcs-input" className="dropzone__label">
+                {uploading
+                  ? 'Uploading…'
+                  : 'Drag & drop FCS files here, or click to browse'}
+              </label>
+              <span className="field__hint">
+                Files are saved locally and registered for analysis. Nothing leaves your
+                machine. (Browsers can't read a file's disk path, so the contents are
+                uploaded and stored server-side.)
+              </span>
+              {uploadNote && <span className="dropzone__note">{uploadNote}</span>}
+            </div>
+
             <PanelEditor
               sid={sessionId}
               fileId={selectedFileId || (analyzeFiles[0] && analyzeFiles[0].id)}

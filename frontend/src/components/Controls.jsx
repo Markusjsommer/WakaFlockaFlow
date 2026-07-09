@@ -148,7 +148,7 @@ export default function Controls({ onRun, disabled, files = [], channels = [] })
         <span className="field__label">
           Number of populations (metaclusters): <strong>{nClusters}</strong>
         </span>
-        <div className="engine-toggle" style={{ flexWrap: 'wrap' }}>
+        <div className="engine-toggle" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
           {CLUSTER_PRESETS.map((n) => (
             <button
               key={n}
@@ -160,10 +160,26 @@ export default function Controls({ onRun, disabled, files = [], channels = [] })
               {n}
             </button>
           ))}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Custom</span>
+            <input
+              type="number"
+              min="2"
+              max="60"
+              value={nClusters}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) setNClusters(Math.min(60, Math.max(2, v)));
+              }}
+              disabled={disabled}
+              style={{ width: 72 }}
+              aria-label="Custom number of populations"
+            />
+          </label>
         </div>
         <span className="field__hint">
           FlowSOM builds a self-organizing map then meta-clusters its nodes into this many
-          populations.
+          populations. Pick a preset or enter a custom value (2 to 60).
         </span>
       </div>
 

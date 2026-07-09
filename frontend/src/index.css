@@ -216,6 +216,25 @@ tbody input[type='text'] { padding: 6px 8px; font-size: 0.88rem; font-weight: 60
   border-radius: var(--radius); padding: 14px 18px; margin: 16px 0;
 }
 
+/* ---------------------------------------------------------------- dropzone */
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center;
+  border: 1.5px dashed var(--border-strong); border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 22px 20px; margin: 16px 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.is-drag { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone__label {
+  font-weight: 600; color: var(--fg); cursor: pointer;
+  padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: #fff; transition: border-color 0.15s, color 0.15s;
+}
+.dropzone__label:hover { border-color: var(--accent); color: var(--accent-dark); }
+.dropzone .field__hint { max-width: 560px; margin-top: 0; }
+.dropzone__note { color: var(--accent-dark); font-size: 0.85rem; font-weight: 500; }
+
 @media (max-width: 860px) {
   .umap-pair { grid-template-columns: 1fr; }
   .wordmark__tag { display: none; }
