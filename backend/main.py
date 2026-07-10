@@ -94,13 +94,36 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+_META_CACHE: dict[str, tuple] = {}
+
+
+def _meta(path):
+    """(n_events, n_channels, has_markers) for an FCS file, cached per path.
+    has_markers = the file's channels/$PnS labels resolve to canonical markers
+    (CD3, CD19, ...), i.e. auto cell-type annotation can run on it."""
+    key = str(path)
+    if key in _META_CACHE:
+        return _META_CACHE[key]
+    try:
+        from analysis.annotate import normalize_marker
+        events, channel_names, marker_labels = analysis_io.load_events(key, transform=False)
+        labels = marker_labels if marker_labels else []
+        has_markers = any(
+            normalize_marker(channel_names[i])
+            or (i < len(labels) and normalize_marker(labels[i]))
+            for i in range(len(channel_names))
+        )
+        info = (int(events.shape[0]), int(events.shape[1]), bool(has_markers))
+    except Exception:  # noqa: BLE001
+        info = (0, 0, False)
+    _META_CACHE[key] = info
+    return info
+
+
 def _probe(path: Path):
     """Return (n_events, n_channels) for an FCS file, best-effort."""
-    try:
-        events, channel_names, _labels = analysis_io.load_events(str(path), transform=False)
-        return int(events.shape[0]), int(events.shape[1])
-    except Exception:  # noqa: BLE001
-        return 0, 0
+    ne, nc, _ = _meta(path)
+    return ne, nc
 
 
 def _require_session(db: SASession, sid: str) -> SessionModel:
@@ -285,7 +308,13 @@ def list_files(sid: str, db: SASession = Depends(get_db)):
     _require_session(db, sid)
     rows = db.query(FCSFile).filter(FCSFile.session_id == sid).all()
     return [
-        {"id": r.id, "filename": r.filename, "n_events": r.n_events, "n_channels": r.n_channels}
+        {
+            "id": r.id,
+            "filename": r.filename,
+            "n_events": r.n_events,
+            "n_channels": r.n_channels,
+            "has_markers": _meta(r.file_path)[2],
+        }
         for r in rows
     ]
 

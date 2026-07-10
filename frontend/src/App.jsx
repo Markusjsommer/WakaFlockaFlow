@@ -107,7 +107,13 @@ export default function App() {
         }
         setSessionId(sid);
         try {
-          setFiles((await listFiles(sid)) || []);
+          const list = (await listFiles(sid)) || [];
+          setFiles(list);
+          // Default to a marker-named file so the demo auto-annotates out of the
+          // box; fluorophore/detector-named files (E1, raw) can't be cell-typed
+          // until their panel is mapped.
+          const pref = list.find((f) => f.has_markers) || list[0];
+          if (pref) setSelectedFileId(pref.id);
         } catch (_) {
           /* files are informational; backend falls back to the demo file */
         }
@@ -264,6 +270,9 @@ export default function App() {
 
   const populations = run ? run.populations || [] : [];
   const totalCells = populations.reduce((s, p) => s + (Number(p.cell_count) || 0), 0);
+  // If nothing got a cell-type name, the file's channels aren't marker-named.
+  const noneAnnotated =
+    populations.length > 0 && populations.every((p) => /^Population \d+$/.test(p.name || ''));
 
   return (
     <div className="app">
@@ -396,6 +405,16 @@ export default function App() {
                 UMAP
               </div>
             </div>
+
+            {noneAnnotated && (
+              <div className="card" style={{ borderColor: 'var(--accent)', background: 'var(--accent-soft)' }}>
+                <strong>No cell-type names?</strong> This file's channels aren't
+                marker-named (they look like fluorophores or detectors), so automatic
+                annotation has nothing to match. Map channels to markers in the{' '}
+                <strong>Marker names (panel editor)</strong> above, then it re-labels
+                instantly. Or pick a marker-named file (the bundled demo is one).
+              </div>
+            )}
 
             <div className="card">
               <UmapScatter
