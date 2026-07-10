@@ -27,10 +27,13 @@ FROM bioconductor/bioconductor_docker:RELEASE_3_20
 
 # --- R spectral engines -----------------------------------------------------
 RUN R -e 'BiocManager::install(c("flowCore","FlowSOM","flowWorkspace"), update=FALSE, ask=FALSE)'
+# diffcyt differential testing rides on edgeR (abundance) + limma (state).
+RUN R -e 'BiocManager::install(c("edgeR","limma","SummarizedExperiment","diffcyt"), update=FALSE, ask=FALSE)'
 RUN R -e 'install.packages(c("remotes","jsonlite"), repos="https://cloud.r-project.org"); \
           remotes::install_github("DrCytometer/AutoSpectral", upgrade="never")'
-RUN R -e 'suppressMessages({library(flowCore);library(FlowSOM);library(flowWorkspace);library(AutoSpectral);library(jsonlite)}); \
-          cat("R engines OK: AutoSpectral", as.character(packageVersion("AutoSpectral")), "\n")'
+RUN R -e 'suppressMessages({library(flowCore);library(FlowSOM);library(flowWorkspace);library(AutoSpectral);library(edgeR);library(limma);library(jsonlite)}); \
+          cat("R engines OK: AutoSpectral", as.character(packageVersion("AutoSpectral")), \
+              "| edgeR", as.character(packageVersion("edgeR")), "\n")'
 
 # --- Python backend ---------------------------------------------------------
 # libgomp1 = OpenMP runtime for numba/umap-learn.

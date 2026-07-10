@@ -4,13 +4,22 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Runs locally](https://img.shields.io/badge/data-stays%20local-brightgreen.svg)](#privacy)
 
-WakaFlockaFlow takes a spectral flow cytometry FCS file and, without any coding,
-produces named cell populations with counts, frequencies, and marker profiles.
-It runs a post-acquisition workflow behind a browser interface: spectral
-unmixing, transformation, and automated population identification with cell-type
-annotation (FlowSOM + UMAP). It exports a reproducibility bundle for every run.
-Cross-acquisition batch-correction engines (CytoNorm, ComBat) are included; a
-guided interface for them is on the roadmap.
+WakaFlockaFlow takes spectral flow cytometry FCS files and, without any coding,
+produces named cell populations with counts, frequencies, marker profiles, and
+functional-state calls, then compares them across an experimental cohort with a
+statistic. It runs a post-acquisition workflow behind a browser interface:
+spectral unmixing, transformation, automated population identification with
+cell-type annotation (FlowSOM + UMAP), multi-sample cohort analysis on one shared
+embedding, differential abundance and state testing, and explainable gating
+paths. It exports a reproducibility bundle for every run. Cross-acquisition
+batch-correction engines (CytoNorm, ComBat) are included; a guided interface for
+them is on the roadmap.
+
+It covers four of the five things a lab asks of post-acquisition analysis:
+composition (what cell types, in what proportions), state (what those cells are
+doing), quality and harmonization (trustworthy, comparable data), and
+differential analysis (what changed between conditions). Rare-event detection
+(MRD, antigen-specific cells) is a deliberate later vertical.
 
 > WakaFlockaFlow is a **post-acquisition analysis** tool. It reads the standard
 > FCS files your instrument already exports (Cytek Aurora, Sony ID7000, BD
@@ -45,6 +54,21 @@ own:
   labels each population with a canonical cell type (CD4 T, CD8 T, B, NK,
   monocyte, dendritic-cell and other lineages); labels are editable, and
   populations with no confident match are left unlabelled rather than forced.
+* **Functional state**: each population is scored on named functional axes
+  (activation, exhaustion, memory, proliferation, cytotoxicity, signaling) from
+  its marker medians; an axis is scored only when its markers are in the panel.
+* **Cohort analysis**: cluster tens to hundreds of samples together on one
+  shared UMAP so populations are directly comparable, quantify each population
+  per sample, and highlight any single sample on the shared embedding. Samples
+  with different panels are clustered on their common markers.
+* **Differential analysis**: test which populations change in abundance and
+  which markers shift within a population across experimental groups. Uses
+  diffcyt (edgeR + limma) when available, with a dependency-light Python
+  rank-test fallback that runs everywhere.
+* **Gating paths**: for each population, a short sequence of marker-threshold
+  gates (a one-vs-rest decision tree) that reproduces the cluster, reported with
+  a reconstruction-quality score and biaxial plots, and exportable to FlowJo as
+  real marker gates.
 * **Batch correction (engine)**: cross-acquisition normalization engines
   (CytoNorm, with a ComBat fallback) are included and callable; a guided UI
   workflow for multi-batch correction is on the roadmap.
@@ -53,7 +77,7 @@ own:
   engine versions.
 * **FlowJo interoperability**: export an augmented FCS plus a FlowJo workspace
   (`.wsp`) and a GatingML 2.0 file, so the automated populations open in FlowJo
-  as named gates.
+  as named gates defined by their real marker thresholds (from the gating path).
 
 ## Installation
 
@@ -179,6 +203,8 @@ at `/docs` (FastAPI/OpenAPI) when the backend is running.
             │  FlowKit         FCS I/O, arcsinh transform
             │  FlowSOM         SOM clustering + metaclustering
             │  umap-learn      2-D embedding
+            │  scikit-learn    gating-path decision trees
+            │  diffcyt / R     differential abundance + state (edgeR + limma)
             │  CytoNorm / R    batch correction (R engines via subprocess)
             ▼
     Named populations · marker tables · reproducibility export (.zip)
@@ -197,6 +223,8 @@ the underlying engines you rely on:
 * **FlowSOM**: clustering and metaclustering (Van Gassen et al., *Cytometry A*
   2015)
 * **UMAP**: dimensionality reduction (McInnes et al., 2018)
+* **diffcyt / edgeR / limma**: differential discovery (Weber et al., *Commun.
+  Biol.* 2019; Robinson et al. 2010; Ritchie et al. 2015)
 * **CytoNorm**: batch normalization (Van Gassen et al., *Cytometry A* 2020)
 * **flowCore / openCyto**: R data structures and gating (Hahne et al. 2009;
   Finak et al. 2014)
