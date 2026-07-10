@@ -105,6 +105,73 @@ export async function pollJob(jobId) {
   return req(`/jobs/${jobId}`);
 }
 
+// ---- Cohort mode (multi-sample joint UMAP) ----------------------------------
+
+// GET /sessions/{sid}/cohort/preview?file_ids=a,b,c
+//   -> { shared_markers: [labels], dropped_markers: { sample: [labels] }, n_samples }
+// Live preview of which markers joint clustering would use for a file selection.
+export async function cohortPreview(sid, fileIds) {
+  const q = encodeURIComponent((fileIds || []).join(','));
+  return req(`/sessions/${sid}/cohort/preview?file_ids=${q}`);
+}
+
+// POST /sessions/{sid}/cohort -> { job_id, clustering_run_id }
+// body: { samples: [{ fcs_file_id, sample_label?, group?, batch?, covariates? }],
+//         xdim?, ydim?, n_clusters?, seed?, markers? }
+export async function startCohort(sid, body) {
+  return req(`/sessions/${sid}/cohort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// GET /sessions/{sid}/clustering/{rid}/breakdown
+//   -> { samples: [...], populations: [{ metacluster_id, name, color, per_sample: [...] }] }
+export async function getBreakdown(sid, rid) {
+  return req(`/sessions/${sid}/clustering/${rid}/breakdown`);
+}
+
+// PUT /sessions/{sid}/clustering/{rid}/samples/{sampleId} body { group?, batch?, covariates? }
+export async function tagSample(sid, rid, sampleId, body) {
+  return req(`/sessions/${sid}/clustering/${rid}/samples/${sampleId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// ---- Differential analysis --------------------------------------------------
+
+// POST /sessions/{sid}/clustering/{rid}/differential -> { job_id, differential_run_id }
+// body: { group_field, contrast?, covariates?, paired_field?, min_cells?, min_samples?, engine }
+export async function startDifferential(sid, rid, body) {
+  return req(`/sessions/${sid}/clustering/${rid}/differential`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// GET /sessions/{sid}/clustering/{rid}/differential/{did}
+//   -> { status, engine, notes, da: [...], ds: [...] }
+export async function getDifferentialRun(sid, rid, did) {
+  return req(`/sessions/${sid}/clustering/${rid}/differential/${did}`);
+}
+
+// Direct-download URL for the differential results (.zip: da/ds CSVs + README).
+export function differentialExportUrl(sid, rid, did) {
+  return `${BASE}/sessions/${sid}/clustering/${rid}/differential/${did}/export`;
+}
+
+// ---- Gate paths (explainable marker gates) ----------------------------------
+
+// GET /sessions/{sid}/clustering/{rid}/gatepaths
+//   -> { populations: [{ metacluster_id, name, color, steps, precision, recall, f1 }] }
+export async function getGatePaths(sid, rid) {
+  return req(`/sessions/${sid}/clustering/${rid}/gatepaths`);
+}
+
 // ---- Spectral unmixing (v2) --------------------------------------------------
 
 // GET /sessions/{sid}/unmix/controls -> { bundled: [names], count }

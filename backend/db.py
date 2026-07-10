@@ -10,9 +10,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# Absolute location of the SQLite provenance database.
-BASE_DIR = "/Users/markus/_work/caveman_flow"
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# Location of the SQLite provenance database. Honors WAKAFLOCKA_DATA (set by the
+# console launcher for pip/conda installs) so runtime state never lands in
+# site-packages; falls back to <repo>/data in a source checkout.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.environ.get("WAKAFLOCKA_DATA") or os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "provenance.db")
 
 # SQLite needs the parent directory to exist before the first connect.

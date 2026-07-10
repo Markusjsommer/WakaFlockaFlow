@@ -32,6 +32,7 @@ R_SCRIPTS_DIR = os.environ.get(
 IMAGE_FOR = {
     "run_unmix.R": "wakaflocka-r:unmix",
     "run_cytonorm.R": "wakaflocka-r:cytonorm",
+    "run_diffcyt.R": "wakaflocka-r:diffcyt",
 }
 
 

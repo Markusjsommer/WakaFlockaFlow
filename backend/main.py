@@ -26,19 +26,25 @@ from sqlalchemy.orm import Session as SASession
 from db import engine, SessionLocal, Base, get_db
 from models import Session as SessionModel, FCSFile, Job, BatchCorrectionRun
 import models_cluster  # noqa: F401 - registers ClusteringRun/Population on Base.metadata
+import models_diff  # noqa: F401 - registers DifferentialRun/DAResult/DSResult on Base.metadata
 from clustering_api import router as clustering_router
+from differential_api import router as differential_router
 import unmix_api
 from analysis import io as analysis_io
 import jobs
 
 # --------------------------------------------------------------------------- paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = REPO_ROOT / "data"
+# Runtime state + bundled demo are env-overridable so a pip/conda install can
+# point them at a user-writable dir and the packaged sample data respectively
+# (the console launcher sets these); unset falls back to the repo layout.
+DATA_DIR = Path(os.environ.get("WAKAFLOCKA_DATA") or (REPO_ROOT / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 JOBS_DIR = DATA_DIR / "jobs"
 EXPORTS_DIR = DATA_DIR / "exports"
+_SAMPLE_ROOT = Path(os.environ.get("WAKAFLOCKA_SAMPLE_DATA") or (REPO_ROOT / "sample_data"))
 E1_PATH = REPO_ROOT / "PBMC_40color_E1_UNMIXED.fcs"
-DEMO_DIR = REPO_ROOT / "sample_data" / "spectral_pbmc"  # bundled permissive demo (Artistic-2.0)
+DEMO_DIR = _SAMPLE_ROOT / "spectral_pbmc"  # bundled permissive demo (Artistic-2.0)
 
 # In-memory per-session transform config (single-process prototype).
 TRANSFORMS: dict[str, dict] = {}
@@ -139,6 +145,9 @@ def _bootstrap():
         directory.mkdir(parents=True, exist_ok=True)
 
     Base.metadata.create_all(bind=engine)
+    # create_all adds new tables but never new columns to an existing table;
+    # backfill the cohort columns on legacy clustering_runs rows.
+    models_cluster.ensure_columns(engine)
 
     db = SessionLocal()
     try:
@@ -473,6 +482,7 @@ def get_job(job_id: str, db: SASession = Depends(get_db)):
 
 app.include_router(router)
 app.include_router(clustering_router)
+app.include_router(differential_router)
 app.include_router(unmix_api.router)
 
 

@@ -17,6 +17,53 @@ function topMarkers(medianExpression, n = 3) {
     .slice(0, n);
 }
 
+// Functional-state axis -> short label + chip colour.
+const STATE_STYLE = {
+  Activation: { label: 'Activated', color: '#E69F00' },
+  Exhaustion: { label: 'Exhausted', color: '#D55E00' },
+  Memory: { label: 'Memory', color: '#4477AA' },
+  Proliferation: { label: 'Proliferating', color: '#228833' },
+  Cytotoxicity: { label: 'Cytotoxic', color: '#AA3377' },
+  Signaling: { label: 'Signaling', color: '#009E73' },
+};
+
+function StateCell({ axes }) {
+  if (!axes || axes.length === 0) {
+    return <span style={{ color: 'var(--muted)' }}>-</span>;
+  }
+  const on = axes.filter((a) => a.call);
+  if (on.length === 0) {
+    return <span style={{ color: 'var(--muted)' }}>baseline</span>;
+  }
+  return (
+    <span style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+      {on.map((a) => {
+        const s = STATE_STYLE[a.name] || { label: a.name, color: '#666' };
+        return (
+          <span
+            key={a.name}
+            title={`${a.name} score ${a.score}${a.markers && a.markers.length ? ' · ' + a.markers.join(', ') : ''}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              background: s.color,
+              color: '#fff',
+              borderRadius: 5,
+              padding: '1px 7px',
+              fontSize: '0.76rem',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {s.label}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 function NameCell({ pop, onPatch, disabled }) {
   const [value, setValue] = useState(pop.name || '');
 
@@ -74,6 +121,7 @@ export default function PopulationTable({ populations = [], onPatch, onHover, on
             <th style={thNum}>Cluster</th>
             <th style={thNum}>Cells</th>
             <th style={thNum}>%</th>
+            <th style={{ ...th, textAlign: 'left' }}>Functional state</th>
             <th style={{ ...th, textAlign: 'left' }}>Top median markers</th>
           </tr>
         </thead>
@@ -91,7 +139,7 @@ export default function PopulationTable({ populations = [], onPatch, onHover, on
                 <td style={td}>
                   <input
                     type="color"
-                    value={pop.color || '#4DBBD5'}
+                    value={pop.color || '#4477AA'}
                     onChange={(e) => onPatch(pop.id, { color: e.target.value })}
                     disabled={disabled}
                     aria-label={`Recolor population ${pop.metacluster_id}`}
@@ -105,6 +153,9 @@ export default function PopulationTable({ populations = [], onPatch, onHover, on
                 <td style={tdNum}>{pop.metacluster_id}</td>
                 <td style={tdNum}>{Number(pop.cell_count).toLocaleString()}</td>
                 <td style={tdNum}>{Number.isFinite(pct) ? pct.toFixed(1) : '-'}</td>
+                <td style={td}>
+                  <StateCell axes={pop.state_axes} />
+                </td>
                 <td style={td}>
                   {tops.length === 0 ? (
                     <span style={{ color: 'var(--muted)' }}>-</span>

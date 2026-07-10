@@ -29,3 +29,11 @@ scratchpad/
 # Redundant root copies of demo assets (the canonical ones live in sample_data/)
 /QC_biology_check.png
 /single_stain_controls.tar.gz
+
+# Python packaging build artifacts
+/dist/
+/build/
+*.egg-info/
+# Vendored into the wheel by scripts/build_package.sh (source lives elsewhere)
+/backend/webui/
+/backend/sample_data/
