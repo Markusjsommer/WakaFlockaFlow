@@ -164,6 +164,14 @@ export function differentialExportUrl(sid, rid, did) {
   return `${BASE}/sessions/${sid}/clustering/${rid}/differential/${did}/export`;
 }
 
+// ---- Gate paths (explainable marker gates) ----------------------------------
+
+// GET /sessions/{sid}/clustering/{rid}/gatepaths
+//   -> { populations: [{ metacluster_id, name, color, steps, precision, recall, f1 }] }
+export async function getGatePaths(sid, rid) {
+  return req(`/sessions/${sid}/clustering/${rid}/gatepaths`);
+}
+
 // ---- Spectral unmixing (v2) --------------------------------------------------
 
 // GET /sessions/{sid}/unmix/controls -> { bundled: [names], count }

@@ -100,7 +100,38 @@ def _build_strategy(populations: list, gate_names: list) -> "fk.GatingStrategy":
     return gs
 
 
-def build_flowjo_export(events, channel_names, labels, populations, outdir) -> dict:
+def _build_marker_strategy(populations, gate_names, gate_paths) -> "fk.GatingStrategy":
+    """One multi-dimensional RectangleGate per population on the REAL marker
+    channels: the AND of its gate-path constraints (from gatepaths.derive). Open
+    sides are closed with the data axis bounds so GatingML/.wsp stay valid.
+    Populations without a derived path fall back to the Population-parameter gate.
+    """
+    gs = fk.GatingStrategy()
+    for pop, gate_name in zip(populations, gate_names):
+        mc = int(pop["metacluster_id"])
+        gp = gate_paths.get(mc) or gate_paths.get(str(mc))
+        steps = gp.get("steps") if gp else None
+        if not steps:
+            value = mc + 1
+            dim = fk.Dimension(POPULATION_PARAM, compensation_ref="uncompensated",
+                               transformation_ref=None,
+                               range_min=value - 0.5, range_max=value + 0.5)
+            gs.add_gate(fk.gates.RectangleGate(gate_name, dimensions=[dim]), gate_path=("root",))
+            continue
+        dims = []
+        for s in steps:
+            lo = s["lo"] if s.get("lo") is not None else s["axis_min"]
+            hi = s["hi"] if s.get("hi") is not None else s["axis_max"]
+            if hi <= lo:
+                hi = lo + 1e-6
+            dims.append(fk.Dimension(str(s["marker"]), compensation_ref="uncompensated",
+                                     transformation_ref=None, range_min=float(lo), range_max=float(hi)))
+        gs.add_gate(fk.gates.RectangleGate(gate_name, dimensions=dims), gate_path=("root",))
+    return gs
+
+
+def build_flowjo_export(events, channel_names, labels, populations, outdir,
+                        gate_paths=None) -> dict:
     """Build a FlowJo interoperability bundle for one clustering run.
 
     Args:
@@ -138,16 +169,20 @@ def build_flowjo_export(events, channel_names, labels, populations, outdir) -> d
     fcs_path = os.path.abspath(os.path.join(outdir, "analyzed.fcs"))
 
     # --- FlowJo workspace (.wsp): gates named by cell type (spaces are fine) -----
+    # With gate_paths, gates are real marker-threshold rectangles; otherwise a
+    # single gate per cluster on the synthetic Population parameter.
+    def strategy(names):
+        return (_build_marker_strategy(populations, names, gate_paths)
+                if gate_paths else _build_strategy(populations, names))
+
     display_names = _display_gate_names(populations)
-    gs_wsp = _build_strategy(populations, display_names)
-    session = fk.Session(gating_strategy=gs_wsp, fcs_samples=[sample])
+    session = fk.Session(gating_strategy=strategy(display_names), fcs_samples=[sample])
     wsp_path = os.path.abspath(os.path.join(outdir, "workspace.wsp"))
     session.export_wsp(wsp_path, "All Samples")
 
     # --- GatingML 2.0 (.xml): gate ids sanitized to valid xs:ID / NCName ---------
     gml_names = _dedupe([_ncname(n) for n in display_names], fallback=lambda i: f"pop{i}")
-    gs_gml = _build_strategy(populations, gml_names)
     gml_path = os.path.abspath(os.path.join(outdir, "gating.xml"))
-    fk.export_gatingml(gs_gml, gml_path)
+    fk.export_gatingml(strategy(gml_names), gml_path)
 
     return {"fcs": fcs_path, "wsp": wsp_path, "gatingml": gml_path}

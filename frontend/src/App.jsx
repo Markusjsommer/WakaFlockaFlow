@@ -33,6 +33,7 @@ import BreakdownTable from './components/BreakdownTable.jsx';
 import DifferentialPanel from './components/DifferentialPanel.jsx';
 import VolcanoPlot from './components/VolcanoPlot.jsx';
 import DifferentialTable from './components/DifferentialTable.jsx';
+import GatePathViewer from './components/GatePathViewer.jsx';
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -661,6 +662,18 @@ export default function App() {
                 provenance for reproducibility.
               </p>
             </div>
+
+            {run.mode !== 'cohort' && (
+              <div className="card">
+                <h2 className="card__title">Gating paths</h2>
+                <GatePathViewer
+                  sid={sessionId}
+                  rid={run.id}
+                  onHover={setHighlightMc}
+                  onLeave={() => setHighlightMc(null)}
+                />
+              </div>
+            )}
           </section>
         )}
       </main>

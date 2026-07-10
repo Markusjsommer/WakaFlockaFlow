@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import io as _io
+import json
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -94,6 +95,52 @@ def _load_labels(run_id: str):
         return None
     data = np.load(path)
     return {k: data[k] for k in data.files}
+
+
+def _gatepaths_path(run_id: str) -> str:
+    return str(_RUNS_DIR / run_id / "gatepaths.json")
+
+
+def _labels_for_run(db: SASession, sid: str, run: ClusteringRun):
+    """Return (events, channel_names, marker_idx, labels) for a single-file run,
+    preferring the persisted label artifact and only re-running FlowSOM for
+    legacy runs without one."""
+    params = run.params or {}
+    path, _fid = _resolve_path(db, sid, params.get("fcs_file_id"))
+    events, channel_names, _lbls = _load_cached(path)
+    marker_idx = _resolve_marker_idx(channel_names, params.get("markers"))
+    saved = _load_labels(run.id)
+    if saved is not None and saved.get("labels") is not None and \
+            len(saved["labels"]) == events.shape[0]:
+        labels = np.asarray(saved["labels"]).astype(int)
+    else:
+        result = cluster.run_flowsom(
+            events, channel_names, marker_idx,
+            xdim=int(params.get("xdim", 10)), ydim=int(params.get("ydim", 10)),
+            n_clusters=int(params.get("n_clusters", 10)), seed=int(params.get("seed", 42)),
+        )
+        labels = np.asarray(result["labels"]).astype(int)
+    return events, channel_names, marker_idx, labels
+
+
+def _run_gate_paths(db: SASession, sid: str, run: ClusteringRun) -> dict:
+    """Derive (and cache) gate paths for a single-file run, keyed by metacluster id."""
+    cache = _Path(_gatepaths_path(run.id))
+    if cache.exists():
+        with open(cache) as fh:
+            return json.load(fh)
+    from analysis import gatepaths as _gatepaths
+
+    events, channel_names, marker_idx, labels = _labels_for_run(db, sid, run)
+    X = events[:, marker_idx]
+    marker_names = [channel_names[i] for i in marker_idx]
+    paths = _gatepaths.derive_gate_paths(
+        X, labels, marker_names, seed=int((run.params or {}).get("seed", 42))
+    )
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache, "w") as fh:
+        json.dump(paths, fh)
+    return paths
 
 
 # --------------------------------------------------------------------------- request schemas
@@ -1122,27 +1169,48 @@ def flowjo_export(sid: str, rid: str, db: SASession = Depends(get_db)):
     pops = sorted(run.populations, key=lambda p: p.metacluster_id)
     populations = [{"metacluster_id": int(p.metacluster_id), "name": p.name} for p in pops]
 
-    readme = (
-        "WakaFlockaFlow - FlowJo Interoperability Export\n"
-        "==============================================\n\n"
-        "Open workspace.wsp in FlowJo. Each automated population is a named gate\n"
-        "on the \"Population\" parameter of analyzed.fcs.\n\n"
-        "Contents:\n"
-        "  analyzed.fcs   - the analyzed events with one extra parameter, \"Population\",\n"
-        "                   holding this cell's population number (metacluster id + 1).\n"
-        "  workspace.wsp  - FlowJo workspace: open this. It references analyzed.fcs and\n"
-        "                   defines one named RectangleGate per automated population,\n"
-        "                   each selecting exactly its cluster on the Population parameter.\n"
-        "  gating.xml     - the same gates as a portable GatingML 2.0 document.\n\n"
-        "Each gate is named after its population (cell type). A gate on the Population\n"
-        "parameter spanning [n-0.5 .. n+0.5] selects population number n.\n"
-    )
+    # Real marker-threshold gates from the derived gating paths (best effort);
+    # falls back to the Population-parameter gate if derivation is unavailable.
+    try:
+        gate_paths = _run_gate_paths(db, sid, run)
+    except Exception:  # noqa: BLE001
+        gate_paths = None
+
+    if gate_paths:
+        readme = (
+            "WakaFlockaFlow - FlowJo Interoperability Export\n"
+            "==============================================\n\n"
+            "Open workspace.wsp in FlowJo. Each automated population is a named gate\n"
+            "defined by real marker thresholds (the gating path that reproduces the\n"
+            "cluster), so you can see and adjust the gates on the actual markers.\n\n"
+            "Contents:\n"
+            "  analyzed.fcs   - the analyzed (arcsinh-transformed) events, plus a\n"
+            "                   \"Population\" parameter (metacluster id + 1) for reference.\n"
+            "  workspace.wsp  - FlowJo workspace: open this. Each population is a\n"
+            "                   RectangleGate on its discriminating markers.\n"
+            "  gating.xml     - the same gates as a portable GatingML 2.0 document.\n\n"
+            "Gate ranges are in arcsinh-transformed space (cofactor 150), matching the\n"
+            "values stored in analyzed.fcs.\n"
+        )
+    else:
+        readme = (
+            "WakaFlockaFlow - FlowJo Interoperability Export\n"
+            "==============================================\n\n"
+            "Open workspace.wsp in FlowJo. Each automated population is a named gate\n"
+            "on the \"Population\" parameter of analyzed.fcs.\n\n"
+            "Contents:\n"
+            "  analyzed.fcs   - the analyzed events with one extra parameter, \"Population\",\n"
+            "                   holding this cell's population number (metacluster id + 1).\n"
+            "  workspace.wsp  - FlowJo workspace: one named RectangleGate per population\n"
+            "                   selecting its cluster on the Population parameter.\n"
+            "  gating.xml     - the same gates as a portable GatingML 2.0 document.\n"
+        )
 
     tmpdir = tempfile.mkdtemp(prefix="flowjo_")
     try:
         try:
             paths = _flowjo.build_flowjo_export(
-                events, channel_names, labels, populations, tmpdir
+                events, channel_names, labels, populations, tmpdir, gate_paths=gate_paths
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"FlowJo export failed: {exc}")
@@ -1163,3 +1231,36 @@ def flowjo_export(sid: str, rid: str, db: SASession = Depends(get_db)):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --------------------------------------------------------------------------- gate paths
+@router.get("/sessions/{sid}/clustering/{rid}/gatepaths")
+def get_gatepaths(sid: str, rid: str, db: SASession = Depends(get_db)):
+    """Explainable marker-threshold gating path per population, with a 1-D biaxial
+    histogram per gate step and reconstruction quality (precision/recall/F1)."""
+    run = db.get(ClusteringRun, rid)
+    if run is None or run.session_id != sid:
+        raise HTTPException(status_code=404, detail="clustering run not found")
+    if (getattr(run, "mode", "single") or "single") == "cohort":
+        raise HTTPException(
+            status_code=400,
+            detail="gate paths are per-sample; run a sample individually to derive them",
+        )
+    try:
+        paths = _run_gate_paths(db, sid, run)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"gate-path derivation failed: {exc}")
+
+    name = {int(p.metacluster_id): p.name for p in run.populations}
+    color = {int(p.metacluster_id): p.color for p in run.populations}
+    result = []
+    for mc_str, gp in paths.items():
+        mc = int(mc_str)
+        result.append({
+            "metacluster_id": mc,
+            "name": name.get(mc, f"Population {mc}"),
+            "color": color.get(mc, "#888888"),
+            **gp,
+        })
+    result.sort(key=lambda r: (-(r.get("f1") or 0), r["metacluster_id"]))
+    return {"populations": result}
