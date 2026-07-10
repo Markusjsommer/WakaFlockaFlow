@@ -27,10 +27,17 @@ from sqlalchemy.orm import Session as SASession
 
 from db import SessionLocal, get_db
 from models import Session as SessionModel, FCSFile, Job
-from models_cluster import ClusteringRun, Population, palette_color
+from models_cluster import (
+    ClusteringRun,
+    ClusteringRunSample,
+    Population,
+    PopulationSampleStat,
+    palette_color,
+)
 from analysis import io as analysis_io
 from analysis import cluster
 from analysis import annotate as _annotate
+from analysis import cohort as _cohort
 
 # Per-session channel -> marker-name overrides (the panel editor). Lets fluorophore-
 # named files (e.g. BUV395-A -> CD19) be annotated. Empty = use the file's own names.
@@ -52,9 +59,40 @@ def _fallback_path() -> str:
     return E1_PATH
 
 # Cache of loaded event matrices keyed by path: path -> (events, channel_names, marker_labels).
+# Bounded: a cohort can reference hundreds of files, so keep only the most recent
+# few to avoid unbounded memory growth.
 _EVENTS_CACHE: dict[str, tuple] = {}
+_EVENTS_CACHE_MAX = 8
+
+# Per-cell labels are persisted here (not in the DB) so FlowJo/gate-path export
+# never has to re-run FlowSOM: data/runs/{run_id}/labels.npz.
+_RUNS_DIR = _REPO_ROOT / "data" / "runs"
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _labels_path(run_id: str) -> str:
+    return str(_RUNS_DIR / run_id / "labels.npz")
+
+
+def _save_labels(run_id: str, labels, sample_idx=None) -> str:
+    """Persist per-cell metacluster labels (and cohort sample codes) to disk."""
+    path = _Path(_labels_path(run_id))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    arrays = {"labels": np.asarray(labels, dtype=np.int32)}
+    if sample_idx is not None:
+        arrays["sample_idx"] = np.asarray(sample_idx, dtype=np.int32)
+    np.savez_compressed(path, **arrays)
+    return str(path)
+
+
+def _load_labels(run_id: str):
+    """Load the per-cell label artifact, or None if it was never written."""
+    path = _Path(_labels_path(run_id))
+    if not path.exists():
+        return None
+    data = np.load(path)
+    return {k: data[k] for k in data.files}
 
 
 # --------------------------------------------------------------------------- request schemas
@@ -65,6 +103,29 @@ class ClusteringRequest(BaseModel):
     n_clusters: int = 10
     seed: int = 42
     markers: list[str] | None = None
+
+
+class CohortSampleSpec(BaseModel):
+    fcs_file_id: str
+    sample_label: str | None = None
+    group: str | None = None
+    batch: str | None = None
+    covariates: dict | None = None
+
+
+class CohortRequest(BaseModel):
+    samples: list[CohortSampleSpec] = Field(default_factory=list)
+    xdim: int = 10
+    ydim: int = 10
+    n_clusters: int = 10
+    seed: int = 42
+    markers: list[str] | None = None
+
+
+class SampleTagPatch(BaseModel):
+    group: str | None = None
+    batch: str | None = None
+    covariates: dict | None = None
 
 
 class PopulationPatch(BaseModel):
@@ -102,10 +163,16 @@ def _require_session(db: SASession, sid: str) -> SessionModel:
 
 
 def _load_cached(path: str):
-    """Load (and cache) the transformed event matrix for ``path``."""
+    """Load (and cache) the transformed event matrix for ``path``.
+
+    The cache is bounded (LRU-ish by insertion order) so referencing many files
+    in a cohort does not grow memory without limit.
+    """
     cached = _EVENTS_CACHE.get(path)
     if cached is None:
         cached = analysis_io.load_events(path, transform=True, cofactor=150.0)
+        while len(_EVENTS_CACHE) >= _EVENTS_CACHE_MAX:
+            _EVENTS_CACHE.pop(next(iter(_EVENTS_CACHE)))
         _EVENTS_CACHE[path] = cached
     return cached
 
@@ -147,9 +214,13 @@ def _channel_marker_map(sid: str, channel_names: list, marker_labels: list) -> d
 
 
 def _run_payload(run: ClusteringRun) -> dict:
-    """Full run detail payload (params, umap, populations)."""
+    """Full run detail payload (params, umap, populations).
+
+    For cohort runs (``mode == 'cohort'``) the umap rows are 4-tuples
+    ``[x, y, metacluster_id, sample_index]``; single-file runs stay 3-tuples.
+    """
     pops = sorted(run.populations, key=lambda p: p.metacluster_id)
-    return {
+    payload = {
         "id": run.id,
         "status": run.status,
         "params": run.params or {},
@@ -158,7 +229,25 @@ def _run_payload(run: ClusteringRun) -> dict:
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "umap": run.umap or [],
         "populations": [_pop_payload(p) for p in pops],
+        "mode": getattr(run, "mode", "single") or "single",
+        "n_samples": getattr(run, "n_samples", None),
+        "shared_markers": getattr(run, "shared_markers", None),
+        "dropped_markers": getattr(run, "dropped_markers", None),
+        "samples": [
+            {
+                "id": s.id,
+                "sample_index": s.sample_index,
+                "sample_label": s.sample_label,
+                "group": s.group,
+                "batch": s.batch,
+                "covariates": s.covariates or {},
+                "n_events": s.n_events,
+                "n_events_used": s.n_events_used,
+            }
+            for s in sorted(run.samples, key=lambda s: s.sample_index)
+        ],
     }
+    return payload
 
 
 def _pop_payload(p: Population) -> dict:
@@ -388,6 +477,9 @@ def _run_clustering(job_id: str, run_id: str, sid: str, params: dict) -> None:
             ):
                 other.is_active = False
 
+            # Persist per-cell labels so FlowJo/gate-path export never re-runs FlowSOM.
+            labels_file = _save_labels(run_id, labels)
+
             run = db.get(ClusteringRun, run_id)
             if run is not None:
                 run.fcs_file_id = fcs_file_id
@@ -395,6 +487,8 @@ def _run_clustering(job_id: str, run_id: str, sid: str, params: dict) -> None:
                 run.umap = umap_list
                 run.status = "completed"
                 run.is_active = True
+                run.mode = "single"
+                run.labels_path = labels_file
             db.commit()
         finally:
             db.close()
@@ -408,6 +502,251 @@ def _run_clustering(job_id: str, run_id: str, sid: str, params: dict) -> None:
             result={"clustering_run_id": run_id, "n_populations": len(populations)},
         )
     except Exception as exc:  # noqa: BLE001 - report every failure to Job + run rows
+        _update_job(job_id, status="failed", message="Failed", error=str(exc))
+        db = SessionLocal()
+        try:
+            run = db.get(ClusteringRun, run_id)
+            if run is not None:
+                run.status = "failed"
+                db.commit()
+        finally:
+            db.close()
+
+
+# --------------------------------------------------------------------------- cohort preview
+@router.get("/sessions/{sid}/cohort/preview")
+def cohort_preview(sid: str, file_ids: str, db: SASession = Depends(get_db)):
+    """Given a comma-separated list of file ids, return the shared/dropped markers
+    the joint clustering would use. Powers the cohort builder's live preview."""
+    _require_session(db, sid)
+    ids = [x for x in (file_ids or "").split(",") if x]
+    samples = []
+    for i, fid in enumerate(ids):
+        row = db.get(FCSFile, fid)
+        if row is None or row.session_id != sid:
+            continue
+        samples.append(
+            {"file_id": fid, "path": row.file_path, "sample_index": i,
+             "sample_label": row.filename}
+        )
+    if not samples:
+        return {"shared_markers": [], "dropped_markers": {}, "n_samples": 0}
+    try:
+        _keys, labels, _per_file, dropped = _cohort.resolve_shared_markers(samples)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"could not read panels: {exc}")
+    return {
+        "shared_markers": labels,
+        "dropped_markers": dropped,
+        "n_samples": len(samples),
+    }
+
+
+# --------------------------------------------------------------------------- start cohort
+@router.post("/sessions/{sid}/cohort")
+def start_cohort(sid: str, req: CohortRequest, db: SASession = Depends(get_db)):
+    """Kick off a pooled multi-sample clustering run (joint UMAP)."""
+    _require_session(db, sid)
+    if not req.samples:
+        raise HTTPException(status_code=400, detail="a cohort needs at least one sample")
+
+    params = {
+        "xdim": req.xdim, "ydim": req.ydim, "n_clusters": req.n_clusters,
+        "seed": req.seed, "markers": req.markers,
+    }
+
+    job_id = str(uuid.uuid4())
+    db.add(
+        Job(
+            id=job_id, type="cohort", status="pending", progress=0,
+            message="Queued", error=None, result=None,
+            created_at=_now(), updated_at=_now(),
+        )
+    )
+    run_id = str(uuid.uuid4())
+    db.add(
+        ClusteringRun(
+            id=run_id, session_id=sid, job_id=job_id, fcs_file_id=None,
+            params=params, n_populations=None, umap=None, status="pending",
+            created_at=_now(), is_active=False, mode="cohort",
+            n_samples=len(req.samples),
+        )
+    )
+    # One row per sample, tagged with experimental group/covariates. Created now
+    # (before the run finishes) so sample tagging is editable immediately.
+    for i, spec in enumerate(req.samples):
+        row = db.get(FCSFile, spec.fcs_file_id)
+        if row is None or row.session_id != sid:
+            raise HTTPException(
+                status_code=400, detail=f"unknown file: {spec.fcs_file_id}"
+            )
+        db.add(
+            ClusteringRunSample(
+                id=str(uuid.uuid4()), clustering_run_id=run_id,
+                fcs_file_id=spec.fcs_file_id, sample_index=i,
+                sample_label=(spec.sample_label or row.filename),
+                group=spec.group, batch=spec.batch, covariates=spec.covariates,
+                n_events=int(row.n_events or 0), n_events_used=0,
+                created_at=_now(),
+            )
+        )
+    db.commit()
+
+    import jobs  # local import: shared ThreadPoolExecutor
+    jobs.executor.submit(_run_cohort_clustering, job_id, run_id, sid, params)
+    return {"job_id": job_id, "clustering_run_id": run_id}
+
+
+def _run_cohort_clustering(job_id: str, run_id: str, sid: str, params: dict) -> None:
+    """Worker: pool samples -> one FlowSOM + one UMAP -> per-sample stats. Fresh sessions."""
+    try:
+        _update_job(job_id, status="running", progress=10, message="Loading samples", error=None)
+
+        # Resolve sample paths from the run's sample rows.
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(ClusteringRunSample)
+                .filter(ClusteringRunSample.clustering_run_id == run_id)
+                .order_by(ClusteringRunSample.sample_index)
+                .all()
+            )
+            samples = []
+            for s in rows:
+                f = db.get(FCSFile, s.fcs_file_id)
+                if f is None:
+                    raise RuntimeError(f"sample file missing: {s.fcs_file_id}")
+                samples.append(
+                    {"file_id": s.fcs_file_id, "path": f.file_path,
+                     "sample_index": s.sample_index, "sample_label": s.sample_label,
+                     "run_sample_id": s.id}
+                )
+        finally:
+            db.close()
+
+        # Shared markers + pooled matrix (never holds all raw matrices at once).
+        shared_keys, shared_labels, per_file, dropped = _cohort.resolve_shared_markers(
+            samples, markers=params.get("markers")
+        )
+        if not shared_keys:
+            raise RuntimeError("samples share no common markers to cluster on")
+
+        _update_job(job_id, progress=30, message="Pooling cells")
+        pool = _cohort.build_pool(samples, shared_keys, per_file, seed=int(params.get("seed", 42)))
+        pooled_X = pool["pooled_X"]
+        sample_idx = pool["sample_idx"]
+        umap_idx = pool["umap_idx"]
+        per_sample = pool["per_sample"]
+
+        # 55 ----------------------------------------------------------------- FlowSOM
+        _update_job(job_id, progress=55, message="Clustering (FlowSOM)")
+        marker_idx = list(range(len(shared_labels)))
+        result = cluster.run_flowsom(
+            pooled_X, shared_labels, marker_idx,
+            xdim=int(params.get("xdim", 10)), ydim=int(params.get("ydim", 10)),
+            n_clusters=int(params.get("n_clusters", 10)), seed=int(params.get("seed", 42)),
+        )
+        labels = np.asarray(result["labels"]).astype(int)
+        populations = result["populations"]
+
+        annotations = _annotate.annotate_populations(populations, channel_to_marker=None)
+
+        # 80 ----------------------------------------------------------------- UMAP
+        _update_job(job_id, progress=80, message="UMAP embedding")
+        idx, xy = cluster.umap_coords(
+            pooled_X, marker_idx, seed=int(params.get("seed", 42)), preselected_idx=umap_idx
+        )
+        sampled_mc = labels[idx]
+        sampled_sample = sample_idx[idx]
+        umap_list = [
+            [float(xy[i, 0]), float(xy[i, 1]), int(sampled_mc[i]), int(sampled_sample[i])]
+            for i in range(xy.shape[0])
+        ]
+
+        metacluster_ids = sorted(np.unique(labels).tolist())
+        n_used = {p["sample_index"]: p["n_events_used"] for p in per_sample}
+        stats = _cohort.per_sample_stats(
+            pooled_X, labels, sample_idx, shared_labels, metacluster_ids, n_used
+        )
+
+        labels_file = _save_labels(run_id, labels, sample_idx=sample_idx)
+
+        # persist populations + per-sample stats + run (fresh session)
+        db = SessionLocal()
+        try:
+            mc_to_pop: dict[int, str] = {}
+            for order, pop in enumerate(populations):
+                pid = str(uuid.uuid4())
+                mc_to_pop[int(pop["metacluster_id"])] = pid
+                db.add(
+                    Population(
+                        id=pid, clustering_run_id=run_id, parent_id=None,
+                        name=(annotations[order]["label"]
+                              or f"Unnamed Population {int(pop['metacluster_id']) + 1}"),
+                        metacluster_id=int(pop["metacluster_id"]),
+                        cell_count=int(pop["cell_count"]),
+                        percentage_of_parent=float(pop["percentage"]),
+                        median_expression=_jsonable(pop["median_expression"]),
+                        color=palette_color(order), is_manual_gate=False,
+                    )
+                )
+
+            # Flush populations so their ids exist before the stats rows (which
+            # FK to populations.id) are inserted; SQLite enforces FKs immediately.
+            db.flush()
+
+            # sample_index -> run_sample_id, and update contributed-cell counts.
+            si_to_rs: dict[int, str] = {}
+            for s in samples:
+                si_to_rs[int(s["sample_index"])] = s["run_sample_id"]
+            for ps in per_sample:
+                rs = db.get(ClusteringRunSample, si_to_rs[ps["sample_index"]])
+                if rs is not None:
+                    rs.n_events_used = int(ps["n_events_used"])
+
+            for st in stats:
+                pid = mc_to_pop.get(int(st["metacluster_id"]))
+                rsid = si_to_rs.get(int(st["sample_index"]))
+                if pid is None or rsid is None:
+                    continue
+                db.add(
+                    PopulationSampleStat(
+                        id=str(uuid.uuid4()), clustering_run_id=run_id,
+                        population_id=pid, run_sample_id=rsid,
+                        metacluster_id=int(st["metacluster_id"]),
+                        sample_index=int(st["sample_index"]),
+                        cell_count=int(st["cell_count"]),
+                        percentage_of_sample=float(st["percentage_of_sample"]),
+                        median_expression=_jsonable(st["median_expression"]),
+                    )
+                )
+
+            for other in (
+                db.query(ClusteringRun)
+                .filter(ClusteringRun.session_id == sid, ClusteringRun.is_active == True)  # noqa: E712
+                .all()
+            ):
+                other.is_active = False
+
+            run = db.get(ClusteringRun, run_id)
+            if run is not None:
+                run.n_populations = len(populations)
+                run.umap = umap_list
+                run.status = "completed"
+                run.is_active = True
+                run.shared_markers = list(shared_labels)
+                run.dropped_markers = _jsonable(dropped)
+                run.labels_path = labels_file
+            db.commit()
+        finally:
+            db.close()
+
+        _update_job(
+            job_id, status="completed", progress=100, message="Done",
+            result={"clustering_run_id": run_id, "n_populations": len(populations),
+                    "n_samples": len(samples)},
+        )
+    except Exception as exc:  # noqa: BLE001
         _update_job(job_id, status="failed", message="Failed", error=str(exc))
         db = SessionLocal()
         try:
@@ -436,6 +775,8 @@ def list_clustering(sid: str, db: SASession = Depends(get_db)):
             "n_populations": r.n_populations,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "is_active": r.is_active,
+            "mode": getattr(r, "mode", "single") or "single",
+            "n_samples": getattr(r, "n_samples", None),
         }
         for r in rows
     ]
@@ -511,6 +852,76 @@ def patch_population(
     db.commit()
     db.refresh(pop)
     return _pop_payload(pop)
+
+
+# --------------------------------------------------------------------------- cohort breakdown
+@router.get("/sessions/{sid}/clustering/{rid}/breakdown")
+def clustering_breakdown(sid: str, rid: str, db: SASession = Depends(get_db)):
+    """population x sample counts/percentages for a cohort run."""
+    run = db.get(ClusteringRun, rid)
+    if run is None or run.session_id != sid:
+        raise HTTPException(status_code=404, detail="clustering run not found")
+
+    samples = sorted(run.samples, key=lambda s: s.sample_index)
+    pops = sorted(run.populations, key=lambda p: p.metacluster_id)
+    stats = (
+        db.query(PopulationSampleStat)
+        .filter(PopulationSampleStat.clustering_run_id == rid)
+        .all()
+    )
+    by_key: dict[tuple, PopulationSampleStat] = {
+        (int(s.metacluster_id), int(s.sample_index)): s for s in stats
+    }
+    return {
+        "samples": [
+            {"sample_index": s.sample_index, "sample_label": s.sample_label,
+             "group": s.group, "batch": s.batch, "n_events_used": s.n_events_used}
+            for s in samples
+        ],
+        "populations": [
+            {
+                "metacluster_id": p.metacluster_id,
+                "name": p.name,
+                "color": p.color,
+                "per_sample": [
+                    {
+                        "sample_index": s.sample_index,
+                        "cell_count": (by_key.get((p.metacluster_id, s.sample_index)).cell_count
+                                       if (p.metacluster_id, s.sample_index) in by_key else 0),
+                        "percentage_of_sample": (
+                            by_key.get((p.metacluster_id, s.sample_index)).percentage_of_sample
+                            if (p.metacluster_id, s.sample_index) in by_key else 0.0),
+                    }
+                    for s in samples
+                ],
+            }
+            for p in pops
+        ],
+    }
+
+
+@router.put("/sessions/{sid}/clustering/{rid}/samples/{sample_id}")
+def tag_sample(sid: str, rid: str, sample_id: str, req: SampleTagPatch,
+               db: SASession = Depends(get_db)):
+    """Update a cohort sample's experimental group / batch / covariate tags."""
+    run = db.get(ClusteringRun, rid)
+    if run is None or run.session_id != sid:
+        raise HTTPException(status_code=404, detail="clustering run not found")
+    s = db.get(ClusteringRunSample, sample_id)
+    if s is None or s.clustering_run_id != rid:
+        raise HTTPException(status_code=404, detail="sample not found")
+    if req.group is not None:
+        s.group = req.group.strip() or None
+    if req.batch is not None:
+        s.batch = req.batch.strip() or None
+    if req.covariates is not None:
+        s.covariates = req.covariates
+    db.commit()
+    db.refresh(s)
+    return {
+        "id": s.id, "sample_index": s.sample_index, "sample_label": s.sample_label,
+        "group": s.group, "batch": s.batch, "covariates": s.covariates or {},
+    }
 
 
 # --------------------------------------------------------------------------- export
@@ -660,9 +1071,18 @@ def flowjo_export(sid: str, rid: str, db: SASession = Depends(get_db)):
     if run is None or run.session_id != sid:
         raise HTTPException(status_code=404, detail="clustering run not found")
 
+    if (getattr(run, "mode", "single") or "single") == "cohort":
+        raise HTTPException(
+            status_code=400,
+            detail="FlowJo export is per-sample and not available for cohort runs yet; "
+                   "run the sample individually to export its gates.",
+        )
+
     params = run.params or {}
 
-    # Recover the event matrix + per-cell labels by re-running (deterministic) clustering.
+    # Recover the event matrix + per-cell labels. Prefer the persisted labels
+    # artifact; only re-run the deterministic clustering for legacy runs that
+    # predate label persistence.
     path, _file_id = _resolve_path(db, sid, params.get("fcs_file_id"))
     try:
         events, channel_names, _labels = _load_cached(path)
@@ -670,16 +1090,21 @@ def flowjo_export(sid: str, rid: str, db: SASession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"could not read FCS: {exc}")
 
     marker_idx = _resolve_marker_idx(channel_names, params.get("markers"))
-    result = cluster.run_flowsom(
-        events,
-        channel_names,
-        marker_idx,
-        xdim=int(params.get("xdim", 10)),
-        ydim=int(params.get("ydim", 10)),
-        n_clusters=int(params.get("n_clusters", 10)),
-        seed=int(params.get("seed", 42)),
-    )
-    labels = np.asarray(result["labels"]).astype(int)
+    saved = _load_labels(rid)
+    if saved is not None and saved.get("labels") is not None and \
+            len(saved["labels"]) == events.shape[0]:
+        labels = np.asarray(saved["labels"]).astype(int)
+    else:
+        result = cluster.run_flowsom(
+            events,
+            channel_names,
+            marker_idx,
+            xdim=int(params.get("xdim", 10)),
+            ydim=int(params.get("ydim", 10)),
+            n_clusters=int(params.get("n_clusters", 10)),
+            seed=int(params.get("seed", 42)),
+        )
+        labels = np.asarray(result["labels"]).astype(int)
 
     # Populations {metacluster_id, name} from the run, ordered by metacluster id.
     pops = sorted(run.populations, key=lambda p: p.metacluster_id)

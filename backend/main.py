@@ -139,6 +139,9 @@ def _bootstrap():
         directory.mkdir(parents=True, exist_ok=True)
 
     Base.metadata.create_all(bind=engine)
+    # create_all adds new tables but never new columns to an existing table;
+    # backfill the cohort columns on legacy clustering_runs rows.
+    models_cluster.ensure_columns(engine)
 
     db = SessionLocal()
     try:

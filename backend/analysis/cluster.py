@@ -88,11 +88,16 @@ def run_flowsom(events, channel_names, marker_idx,
     return {"labels": labels, "populations": populations}
 
 
-def umap_coords(events, marker_idx, subsample: int = 30000, seed: int = 42):
+def umap_coords(events, marker_idx, subsample: int = 30000, seed: int = 42,
+                preselected_idx=None):
     """2D UMAP embedding of a subsample of cells.
 
     Subsamples up to ``subsample`` cell indices, fits a 2D UMAP on the selected
     marker columns, and returns the sampled indices alongside their coordinates.
+
+    When ``preselected_idx`` is given the internal random subsampling is skipped
+    and exactly those rows are embedded (used by cohort mode, which chooses a
+    stratified per-sample subset upstream so labels stay aligned).
 
     Returns:
         idx: np.ndarray[int]   sampled (and sorted) cell indices into ``events``
@@ -103,12 +108,15 @@ def umap_coords(events, marker_idx, subsample: int = 30000, seed: int = 42):
     events = np.asarray(events, dtype=np.float32)
     marker_idx = list(marker_idx)
 
-    n = int(events.shape[0])
-    rng = np.random.default_rng(seed)
-    if n > subsample:
-        idx = np.sort(rng.choice(n, size=subsample, replace=False))
+    if preselected_idx is not None:
+        idx = np.asarray(preselected_idx, dtype=int)
     else:
-        idx = np.arange(n)
+        n = int(events.shape[0])
+        rng = np.random.default_rng(seed)
+        if n > subsample:
+            idx = np.sort(rng.choice(n, size=subsample, replace=False))
+        else:
+            idx = np.arange(n)
 
     X = events[idx][:, marker_idx].astype(np.float32)
     reducer = umap.UMAP(n_components=2, random_state=seed)
