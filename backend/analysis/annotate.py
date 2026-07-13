@@ -57,6 +57,10 @@ CELL_TYPES: list[dict] = [
      "positive": ["CD19", "CD20", "IgD"], "negative": ["CD3", "CD27"]},
     {"name": "B cell", "anchors": ["CD19"],
      "positive": ["CD19", "CD20", "IgM"], "negative": ["CD3", "CD14", "CD56"]},
+    # CD20-anchored B-cell fallback for panels that carry CD20 but not CD19
+    # (common in mass-cytometry / CyTOF panels, e.g. Bodenmiller BCR-XL).
+    {"name": "B cell", "anchors": ["CD20"],
+     "positive": ["CD20", "CD19", "IgM", "IgD"], "negative": ["CD3", "CD14", "CD56"]},
     # ---- NK ------------------------------------------------------------------
     {"name": "CD56bright NK cell", "anchors": ["CD56"],
      "positive": ["CD56"], "negative": ["CD3", "CD16", "CD19"]},
