@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wakaflockaflow"
-version = "0.1.0"
+version = "0.1.1"
 description = "No-code post-acquisition spectral flow cytometry analysis (population ID, cohorts, differential testing, gating paths)"
 readme = "README.md"
 requires-python = ">=3.11"

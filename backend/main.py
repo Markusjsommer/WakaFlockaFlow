@@ -45,6 +45,7 @@ EXPORTS_DIR = DATA_DIR / "exports"
 _SAMPLE_ROOT = Path(os.environ.get("WAKAFLOCKA_SAMPLE_DATA") or (REPO_ROOT / "sample_data"))
 E1_PATH = REPO_ROOT / "PBMC_40color_E1_UNMIXED.fcs"
 DEMO_DIR = _SAMPLE_ROOT / "spectral_pbmc"  # bundled permissive demo (Artistic-2.0)
+DIFF_DEMO_DIR = _SAMPLE_ROOT / "differential_demo"  # synthetic cohort for the differential demo
 
 # In-memory per-session transform config (single-process prototype).
 TRANSFORMS: dict[str, dict] = {}
@@ -199,6 +200,32 @@ def _bootstrap():
                         id=str(uuid.uuid4()),
                         session_id=sess.id,
                         filename="[demo] " + entry.name,
+                        file_path=fpath,
+                        n_events=n_events,
+                        n_channels=n_channels,
+                        uploaded_at=_now(),
+                    )
+                )
+            db.commit()
+
+        # Register the synthetic differential-demo cohort (clearly labelled SYN_*)
+        # so the differential workflow can be demoed out of the box. Not real data.
+        if DIFF_DEMO_DIR.is_dir():
+            for entry in sorted(DIFF_DEMO_DIR.glob("*.fcs")):
+                fpath = str(entry.resolve())
+                exists = (
+                    db.query(FCSFile)
+                    .filter(FCSFile.session_id == sess.id, FCSFile.file_path == fpath)
+                    .first()
+                )
+                if exists is not None:
+                    continue
+                n_events, n_channels = _probe(entry)
+                db.add(
+                    FCSFile(
+                        id=str(uuid.uuid4()),
+                        session_id=sess.id,
+                        filename=entry.name,
                         file_path=fpath,
                         n_events=n_events,
                         n_channels=n_channels,

@@ -5,4 +5,4 @@ build's package-dir). The modules use flat top-level imports and are launched by
 ``wakaflockaflow.cli:main``, which puts the package directory on ``sys.path``.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
