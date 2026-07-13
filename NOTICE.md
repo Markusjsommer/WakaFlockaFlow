@@ -60,6 +60,15 @@ To analyze your own data, drop `.fcs` files into `./fcs/` and run
 `docker compose up` (see [`README.md`](README.md)), they are registered alongside
 the bundled demo, and nothing leaves your machine.
 
+## Bundled synthetic demo cohort
+
+[`sample_data/differential_demo/`](sample_data/differential_demo/) contains eight
+**synthetic** FCS files (not real biology) derived from the flowSpecs demo by
+[`scripts/make_differential_demo.py`](scripts/make_differential_demo.py). They
+carry a planted group difference so the differential-analysis workflow can be run
+end to end with a known ground truth. Clearly labelled `SYN_*` and documented as
+synthetic; safe to redistribute (derived from the Artistic-2.0 flowSpecs set).
+
 ## Bundled UI asset
 
 The loading animation ([`frontend/public/bongo-loading.gif`](frontend/public/bongo-loading.gif))
